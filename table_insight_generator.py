@@ -10,7 +10,23 @@ def read_table_file(uploaded_file: BinaryIO) -> pd.DataFrame:
     if name.endswith(".csv"):
         return pd.read_csv(uploaded_file, header=None)
     if name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(uploaded_file, header=None)
+        sheets = pd.read_excel(uploaded_file, header=None, sheet_name=None)
+        table_sheets = [
+            sheet for sheet in sheets.values()
+            if find_table_starts(sheet) or parse_generic_grid_tables(sheet)
+        ]
+        if not table_sheets:
+            return next(iter(sheets.values()))
+        if len(table_sheets) == 1:
+            return table_sheets[0]
+
+        normalized = []
+        max_cols = max(sheet.shape[1] for sheet in table_sheets)
+        for sheet in table_sheets:
+            normalized_sheet = sheet.reindex(columns=range(max_cols))
+            separator = pd.DataFrame([[None] * max_cols])
+            normalized.extend([normalized_sheet, separator])
+        return pd.concat(normalized, ignore_index=True)
     raise ValueError("Please upload a CSV or Excel banner table output.")
 
 
@@ -171,6 +187,97 @@ def parse_table_block(df: pd.DataFrame, start: int, end: int, stub_col: int) -> 
     }
 
 
+def row_numeric_values(df: pd.DataFrame, row_idx: int, stub_col: int) -> Dict[int, float]:
+    values = {}
+    for col in range(stub_col + 1, df.shape[1]):
+        pct = numeric_pct(df.iat[row_idx, col])
+        if pct is not None:
+            values[col] = pct
+    return values
+
+
+def infer_column_label(df: pd.DataFrame, data_row: int, col: int) -> str:
+    parts: List[str] = []
+    for idx in range(max(0, data_row - 8), data_row):
+        text = clean_text(df.iat[idx, col])
+        if not text:
+            continue
+        if numeric_pct(text) is not None:
+            continue
+        lowered = text.lower()
+        if lowered.startswith("base") or lowered in {"sigma", "sig", "significance", "1", "0"}:
+            continue
+        if text.startswith("(") and text.endswith(")"):
+            continue
+        if text not in parts:
+            parts.append(text)
+    if parts:
+        return " - ".join(parts[-2:])
+    return f"Column {col + 1}"
+
+
+def infer_generic_question(df: pd.DataFrame, first_row: int, stub_col: int) -> str:
+    for idx in range(first_row - 1, max(-1, first_row - 14), -1):
+        text = row_text_from_stub(df, idx, stub_col)
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in {"answer", "answers", "attribute", "attributes", "response", "responses", "label", "labels"}:
+            continue
+        if lowered.startswith("base") or lowered.startswith("table"):
+            continue
+        numeric_count = len(row_numeric_values(df, idx, stub_col))
+        if numeric_count < 2 and valid_attribute(text):
+            return text
+    return "Uploaded Table"
+
+
+def parse_generic_grid_tables(df: pd.DataFrame) -> List[Dict[str, object]]:
+    data_rows = []
+    for idx in range(len(df)):
+        found = row_first_nonempty(df, idx)
+        if not found:
+            continue
+        stub_col, attribute = found
+        if not valid_attribute(attribute):
+            continue
+        values_by_col = row_numeric_values(df, idx, stub_col)
+        if len(values_by_col) >= 2:
+            values = {infer_column_label(df, idx, col): pct for col, pct in values_by_col.items()}
+            data_rows.append({"idx": idx, "stub_col": stub_col, "attribute": attribute, "values": values})
+
+    if not data_rows:
+        return []
+
+    groups = []
+    current = [data_rows[0]]
+    for row in data_rows[1:]:
+        previous = current[-1]
+        if row["idx"] - previous["idx"] <= 3 and row["stub_col"] == previous["stub_col"]:
+            current.append(row)
+        else:
+            groups.append(current)
+            current = [row]
+    groups.append(current)
+
+    tables: List[Dict[str, object]] = []
+    for pos, group in enumerate(groups, start=1):
+        stub_col = int(group[0]["stub_col"])
+        first_row = int(group[0]["idx"])
+        question = infer_generic_question(df, first_row, stub_col)
+        rows = [{"attribute": row["attribute"], "values": row["values"]} for row in group]
+        if rows:
+            tables.append(
+                {
+                    "table": f"Table {pos}",
+                    "question": question,
+                    "theme": clean_theme(question),
+                    "rows": rows,
+                }
+            )
+    return tables
+
+
 def top_total_insight(insight_id: str, table: Dict[str, object]) -> Dict[str, str] | None:
     rows = table["rows"]
     total_candidates = []
@@ -266,7 +373,7 @@ def parse_banner_tables(df: pd.DataFrame) -> List[Dict[str, object]]:
         parsed = parse_table_block(df, start, end, stub_col)
         if parsed:
             tables.append(parsed)
-    return tables
+    return tables or parse_generic_grid_tables(df)
 
 
 def add_story_insights(insights: List[Dict[str, str]], tables: List[Dict[str, object]]) -> None:
