@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import BinaryIO, Dict, List
+from typing import BinaryIO, Dict, List, Tuple
 
 import pandas as pd
 
@@ -44,36 +44,55 @@ def numeric_pct(value: object) -> float | None:
     return number
 
 
-def find_table_starts(df: pd.DataFrame) -> List[int]:
-    starts = []
-    for idx, value in df.iloc[:, 0].items():
-        text = clean_text(value).lower()
-        if text.startswith("table "):
-            starts.append(int(idx))
+def row_first_nonempty(df: pd.DataFrame, row_idx: int) -> Tuple[int, str] | None:
+    for col_idx in range(df.shape[1]):
+        text = clean_text(df.iat[row_idx, col_idx])
+        if text:
+            return col_idx, text
+    return None
+
+
+def row_text_from_stub(df: pd.DataFrame, row_idx: int, stub_col: int) -> str:
+    text = clean_text(df.iat[row_idx, stub_col])
+    if text:
+        return text
+    found = row_first_nonempty(df, row_idx)
+    return found[1] if found else ""
+
+
+def find_table_starts(df: pd.DataFrame) -> List[Tuple[int, int]]:
+    starts: List[Tuple[int, int]] = []
+    for idx in range(len(df)):
+        found = row_first_nonempty(df, idx)
+        if not found:
+            continue
+        col_idx, text = found
+        if text.lower().startswith("table "):
+            starts.append((idx, col_idx))
     return starts
 
 
-def find_question_row(df: pd.DataFrame, start: int, end: int) -> int | None:
+def find_question_row(df: pd.DataFrame, start: int, end: int, stub_col: int) -> int | None:
     for idx in range(start + 1, min(start + 8, end)):
-        text = clean_text(df.iat[idx, 0])
+        text = row_text_from_stub(df, idx, stub_col)
         if text and not text.lower().startswith("table"):
             return idx
     return None
 
 
-def find_base_row(df: pd.DataFrame, question_row: int, end: int) -> int | None:
-    for idx in range(question_row + 1, min(question_row + 12, end)):
-        text = clean_text(df.iat[idx, 0]).lower()
+def find_base_row(df: pd.DataFrame, question_row: int, end: int, stub_col: int) -> int | None:
+    for idx in range(question_row + 1, min(question_row + 18, end)):
+        text = row_text_from_stub(df, idx, stub_col).lower()
         if text.startswith("base"):
             return idx
     return None
 
 
-def banner_labels(df: pd.DataFrame, question_row: int, base_row: int) -> Dict[int, str]:
+def banner_labels(df: pd.DataFrame, question_row: int, base_row: int, stub_col: int) -> Dict[int, str]:
     labels: Dict[int, str] = {}
     header_rows = []
     for idx in range(question_row + 1, base_row):
-        row_values = [clean_text(value) for value in df.iloc[idx, 1:].tolist()]
+        row_values = [clean_text(value) for value in df.iloc[idx, stub_col + 1:].tolist()]
         non_empty = [value for value in row_values if value]
         if not non_empty:
             continue
@@ -86,7 +105,7 @@ def banner_labels(df: pd.DataFrame, question_row: int, base_row: int) -> Dict[in
     group_row = header_rows[-2] if len(header_rows) >= 2 else None
 
     current_group = ""
-    for col in range(1, df.shape[1]):
+    for col in range(stub_col + 1, df.shape[1]):
         group = clean_text(df.iat[group_row, col]) if group_row is not None else ""
         if group:
             current_group = group
@@ -110,25 +129,27 @@ def valid_attribute(text: str) -> bool:
         return False
     if lowered in {"sigma", "sig", "significance"}:
         return False
+    if lowered.startswith("sig "):
+        return False
     if lowered in {"1", "0"}:
         return False
     return True
 
 
-def parse_table_block(df: pd.DataFrame, start: int, end: int) -> Dict[str, object] | None:
-    question_row = find_question_row(df, start, end)
+def parse_table_block(df: pd.DataFrame, start: int, end: int, stub_col: int) -> Dict[str, object] | None:
+    question_row = find_question_row(df, start, end, stub_col)
     if question_row is None:
         return None
-    base_row = find_base_row(df, question_row, end)
+    base_row = find_base_row(df, question_row, end, stub_col)
     if base_row is None:
         return None
 
-    question = clean_text(df.iat[question_row, 0])
-    labels = banner_labels(df, question_row, base_row)
+    question = row_text_from_stub(df, question_row, stub_col)
+    labels = banner_labels(df, question_row, base_row, stub_col)
 
     rows = []
     for idx in range(base_row + 1, end):
-        attribute = clean_text(df.iat[idx, 0])
+        attribute = clean_text(df.iat[idx, stub_col])
         if not valid_attribute(attribute):
             continue
         values = {}
@@ -143,7 +164,7 @@ def parse_table_block(df: pd.DataFrame, start: int, end: int) -> Dict[str, objec
         return None
 
     return {
-        "table": clean_text(df.iat[start, 0]),
+        "table": row_text_from_stub(df, start, stub_col),
         "question": question,
         "theme": clean_theme(question),
         "rows": rows,
@@ -240,9 +261,9 @@ def low_banner_insight(insight_id: str, table: Dict[str, object]) -> Dict[str, s
 def parse_banner_tables(df: pd.DataFrame) -> List[Dict[str, object]]:
     starts = find_table_starts(df)
     tables = []
-    for pos, start in enumerate(starts):
-        end = starts[pos + 1] if pos + 1 < len(starts) else len(df)
-        parsed = parse_table_block(df, start, end)
+    for pos, (start, stub_col) in enumerate(starts):
+        end = starts[pos + 1][0] if pos + 1 < len(starts) else len(df)
+        parsed = parse_table_block(df, start, end, stub_col)
         if parsed:
             tables.append(parsed)
     return tables

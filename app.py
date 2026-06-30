@@ -8,7 +8,7 @@ from insight_generator import extract_questionnaire_text, generate_insights, rea
 from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
-APP_VERSION = "AICF Streamlit Tool v4 + Banner Tables + Story Output"
+APP_VERSION = "AICF Streamlit Tool v4 + Flexible Banner Tables + Story Output"
 
 st.set_page_config(
     page_title="AICF Tool",
