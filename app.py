@@ -8,7 +8,7 @@ from insight_generator import extract_questionnaire_text, generate_insights, rea
 from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
-APP_VERSION = "AICF Streamlit Tool v4 + Table Output"
+APP_VERSION = "AICF Streamlit Tool v4 + Banner Tables + Story Output"
 
 st.set_page_config(
     page_title="AICF Tool",
@@ -65,6 +65,12 @@ def score_dataframe(df: pd.DataFrame, use_manual_scores: bool = False) -> pd.Dat
         else:
             results.append(dict(scored))
     return pd.DataFrame(results)
+
+
+def summary_story_rows(report: pd.DataFrame) -> pd.DataFrame:
+    if report.empty or "theme" not in report.columns:
+        return pd.DataFrame()
+    return report[report["theme"].isin(["Overall Summary", "Complete Story"])].copy()
 
 
 st.title("AI Insight Confidence Framework")
@@ -144,6 +150,14 @@ with mode[0]:
             file_name="aicf_scored_generated_report.csv",
             mime="text/csv",
         )
+        generated_story_report = summary_story_rows(generated_report)
+        if not generated_story_report.empty:
+            st.download_button(
+                "Download Summary & Story AICF Report",
+                data=generated_story_report.to_csv(index=False).encode("utf-8"),
+                file_name="aicf_summary_story_report.csv",
+                mime="text/csv",
+            )
 
 with mode[1]:
     st.subheader("Generate Insights From Tabulated Output")
@@ -199,6 +213,14 @@ with mode[1]:
             file_name="aicf_scored_table_report.csv",
             mime="text/csv",
         )
+        table_story_report = summary_story_rows(table_report)
+        if not table_story_report.empty:
+            st.download_button(
+                "Download Summary & Story AICF Report",
+                data=table_story_report.to_csv(index=False).encode("utf-8"),
+                file_name="aicf_table_summary_story_report.csv",
+                mime="text/csv",
+            )
 
 with mode[2]:
     uploaded_file = st.file_uploader("Upload insights CSV", type=["csv"])
@@ -253,6 +275,14 @@ with mode[2]:
             file_name="aicf_scored_report.csv",
             mime="text/csv",
         )
+        uploaded_story_report = summary_story_rows(report)
+        if not uploaded_story_report.empty:
+            st.download_button(
+                "Download Summary & Story AICF Report",
+                data=uploaded_story_report.to_csv(index=False).encode("utf-8"),
+                file_name="aicf_uploaded_summary_story_report.csv",
+                mime="text/csv",
+            )
 
 with st.expander("How the full AICF workflow works"):
     st.write(

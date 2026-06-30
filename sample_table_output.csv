@@ -1,5 +1,9 @@
-theme,metric_type,n,mean,top_two_box,low_rating,excellent,promoters,passives,detractors,score,selected_pct,selected_n
-Overall Quality,rating,347,3.59,59.7,18.4,24.2,,,,,,
-Business Impact,rating,347,3.65,62.8,15.6,24.2,,,,,,
-Recommendation Advocacy,nps,347,,,,,50.1,28.5,21.3,28.8,,
-Improve Customer Experience,selection,347,,,,,,,,,45.2,157
+Table 1,,,,
+,,,,
+Q1: Shopping Preference,,,,
+,,,,
+,Total,Gender,,Age
+,Total Respondents,Male,Female,25-34
+Base: Total Respondents,100,45,55,40
+Like shopping a lot,0.62,0.55,0.70,0.68
+Shop only when needed,0.38,0.45,0.30,0.32

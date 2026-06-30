@@ -37,8 +37,10 @@ def numeric_pct(value: object) -> float | None:
         return None
     if number > 100:
         return None
-    if number <= 1.5:
+    if 0 <= number <= 1:
         return number * 100
+    if 1 < number < 2:
+        return None
     return number
 
 
