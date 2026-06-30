@@ -1,0 +1,5 @@
+theme,metric_type,n,mean,top_two_box,low_rating,excellent,promoters,passives,detractors,score,selected_pct,selected_n
+Overall Quality,rating,347,3.59,59.7,18.4,24.2,,,,,,
+Business Impact,rating,347,3.65,62.8,15.6,24.2,,,,,,
+Recommendation Advocacy,nps,347,,,,,50.1,28.5,21.3,28.8,,
+Improve Customer Experience,selection,347,,,,,,,,,45.2,157
