@@ -128,6 +128,20 @@ def evidence_strength_score(text: str, review_signal: bool, risky_claim: bool) -
     return clamp_score(score)
 
 
+def is_table_evidence(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "table " in lowered
+        and "%" in lowered
+        and (
+            " vs total" in lowered
+            or "among " in lowered
+            or "selected percentage" in lowered
+            or "generated banner insights" in lowered
+        )
+    )
+
+
 def review_status(score: float, dimension_scores: Dict[str, int]) -> str:
     if score < 2.50 or min(dimension_scores.values()) <= 2:
         return "Human review required"
@@ -136,7 +150,12 @@ def review_status(score: float, dimension_scores: Dict[str, int]) -> str:
     return "Ready with evidence documentation"
 
 
-def dimension_diagnostics(dimension_scores: Dict[str, int]) -> tuple[str, str]:
+def dimension_diagnostics(dimension_scores: Dict[str, int], row: Dict[str, object]) -> tuple[str, str]:
+    combined = f"{row.get('insight_text', '')} {row.get('evidence_note', '')}"
+    table_evidence = is_table_evidence(combined)
+    theme = str(row.get("theme", "")).lower()
+    is_synthesis = theme in {"overall summary", "complete story"}
+
     dimensions_needing_attention = [
         (key, score)
         for key, score in sorted(dimension_scores.items(), key=lambda item: item[1])
@@ -144,10 +163,39 @@ def dimension_diagnostics(dimension_scores: Dict[str, int]) -> tuple[str, str]:
     ]
 
     if not dimensions_needing_attention:
-        return (
-            "No major weak dimension identified",
-            "Proceed, while documenting evidence and analyst review notes.",
-        )
+        if table_evidence:
+            return (
+                "No major weak dimension identified",
+                "Proceed with the table-backed insight; document base size, banner definition, and any significance testing before client use.",
+            )
+        return ("No major weak dimension identified", "Proceed, while documenting evidence and analyst review notes.")
+
+    if table_evidence or is_synthesis:
+        weak_keys = [key for key, _ in dimensions_needing_attention]
+        weakest_labels = [
+            f"{DIMENSIONS[key]['label']} ({score}/5)"
+            for key, score in dimensions_needing_attention[:2]
+        ]
+        actions = []
+        if "triangulation" in weak_keys:
+            actions.append("Check whether the banner difference is statistically significant and directionally consistent across related cuts.")
+        if "interpretability" in weak_keys:
+            actions.append("Simplify the table story into a clearer business sentence before sharing.")
+        if "actionability" in weak_keys:
+            actions.append("Add the practical implication for the audience segment or banner group.")
+        if "evidence_strength" in weak_keys:
+            actions.append("Verify the base size and table calculation; the table evidence is present but should be checked for reliability.")
+        if "business_relevance" in weak_keys:
+            actions.append("Connect the banner pattern to a business decision or targeting implication.")
+        if "bias_risk" in weak_keys:
+            actions.append("Avoid over-claiming causality from a descriptive table difference.")
+        if not actions:
+            actions.append("Review the banner cut with analyst judgment before final reporting.")
+        if is_synthesis:
+            actions = [
+                "Review the synthesized story against the detailed table insights and add business context before client presentation."
+            ]
+        return "; ".join(weakest_labels), " ".join(actions)
 
     weakest_labels = [
         f"{DIMENSIONS[key]['label']} ({score}/5)"
@@ -181,6 +229,7 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     combined = f"{insight} {evidence}".strip()
     word_count = len(re.findall(r"\w+", insight))
 
+    table_evidence = is_table_evidence(combined)
     high_signal = contains_any(combined, ["relative strength", "strong customer advocacy", "high confidence"])
     review_signal = contains_any(combined, ["needs human attention", "requires validation", "unsupported", "not coded", "does not establish", "weak base", "overstates"])
     risky_claim = contains_any(combined, ["fully satisfied", "all customers", "no improvement", "main reason", "primary cause", "only serious", "exclusive benchmark", "reduce investment"])
@@ -201,6 +250,8 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     scores = {key: base for key in DIMENSIONS}
 
     scores["evidence_strength"] = evidence_strength_score(combined, review_signal, risky_claim)
+    if table_evidence and not review_signal and not risky_claim:
+        scores["evidence_strength"] = max(scores["evidence_strength"], 4)
 
     if contains_any(combined, ["customer", "satisfaction", "market", "survey", "respondent", "brand", "product", "service", "business"]):
         scores["methodological_fit"] += 1
@@ -208,6 +259,8 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
         scores["methodological_fit"] -= 2
 
     if contains_any(combined, ["compared", "across", "followed by", "alongside", "linked", "triangulat", "open-ended"]):
+        scores["triangulation"] += 1
+    if table_evidence and " vs total" in combined.lower():
         scores["triangulation"] += 1
     if complete_survey_evidence:
         scores["triangulation"] += 1
@@ -223,8 +276,12 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
 
     if contains_any(combined, ["customer", "client", "business", "revenue", "cost", "roi", "satisfaction", "preference", "recommend", "retention"]):
         scores["business_relevance"] += 1
+    if table_evidence and contains_any(combined, ["over-indexes", "under-indexes", "leading", "selected"]):
+        scores["business_relevance"] += 1
 
     if contains_any(combined, ["should", "priority", "improve", "focus", "recommend", "action", "opportunity", "strengthen", "investigate"]):
+        scores["actionability"] += 1
+    if table_evidence and contains_any(combined, ["over-indexes", "under-indexes", "leading", "selected"]):
         scores["actionability"] += 1
     if complete_survey_evidence:
         scores["actionability"] += 1
@@ -234,6 +291,8 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     if contains_any(combined, ["requires validation", "unsupported", "causal", "fully satisfied", "all customers", "only serious", "primary cause", "reduce investment"]):
         scores["bias_risk"] -= 2
     if contains_any(combined, ["moderate", "suggest", "may", "should be interpreted", "requires validation", "hypothesis"]):
+        scores["bias_risk"] += 1
+    if table_evidence and not risky_claim:
         scores["bias_risk"] += 1
     if complete_survey_evidence:
         scores["bias_risk"] += 1
@@ -269,7 +328,7 @@ def score_insight(row: Dict[str, object], use_manual_scores: bool = False) -> AI
         for key in DIMENSIONS
     )
 
-    weakest_dimensions, recommendation = dimension_diagnostics(dimension_scores)
+    weakest_dimensions, recommendation = dimension_diagnostics(dimension_scores, row)
 
     return AICFResult(
         insight_id=str(row.get("insight_id", "")).strip(),
