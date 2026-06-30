@@ -8,7 +8,7 @@ from insight_generator import extract_questionnaire_text, generate_insights, rea
 from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
-APP_VERSION = "AICF Streamlit Tool v4 + Flexible Tables + Review Logic Fix"
+APP_VERSION = "AICF Streamlit Tool v4 + Final Review Status Fix 2026-06-30"
 
 st.set_page_config(
     page_title="AICF Tool",
@@ -64,7 +64,29 @@ def score_dataframe(df: pd.DataFrame, use_manual_scores: bool = False) -> pd.Dat
             results.append(scored.__dict__)
         else:
             results.append(dict(scored))
-    return pd.DataFrame(results)
+    return align_review_status(pd.DataFrame(results))
+
+
+def align_review_status(report: pd.DataFrame) -> pd.DataFrame:
+    if report.empty or "confidence_level" not in report.columns:
+        return report
+
+    dimension_columns = [key for key in DIMENSIONS if key in report.columns]
+    if not dimension_columns:
+        return report
+
+    dimension_scores = report[dimension_columns].apply(pd.to_numeric, errors="coerce")
+    ready_mask = (
+        report["confidence_level"].eq("High Confidence")
+        & dimension_scores.ge(3).all(axis=1)
+    )
+    report.loc[ready_mask, "review_status"] = "Ready with evidence documentation"
+    report.loc[ready_mask, "weakest_dimensions"] = "No major weak dimension identified"
+    report.loc[
+        ready_mask,
+        "recommendation",
+    ] = "Proceed with the insight; document the evidence source, base size, and analyst review notes before final use."
+    return report
 
 
 def summary_story_rows(report: pd.DataFrame) -> pd.DataFrame:
