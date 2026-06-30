@@ -7,7 +7,7 @@ This is a Streamlit app for generating and scoring AI-generated market research 
 The tool supports three workflows:
 
 1. Upload survey data and an optional questionnaire. The tool generates AI-style insights and evidence notes, then scores them with AICF.
-2. Upload tabulated output. The tool generates insights from summary tables, then scores them with AICF.
+2. Upload MR-style banner table output. The tool generates insights from rows and banner columns, then scores them with AICF.
 3. Upload existing AI-generated insights. The tool scores them with AICF.
 
 The tool automatically estimates confidence across seven AICF dimensions:
@@ -49,21 +49,35 @@ evidence_strength, methodological_fit, triangulation, interpretability, business
 
 Manual scores should be from `1` to `5`.
 
-## Table Output Mode
+## Banner Table Output Mode
 
-For the "Generate From Tables" workflow, upload a CSV or Excel table with columns such as:
+For the "Generate From Tables" workflow, upload a CSV or Excel banner table output where:
+
+- Rows contain answer attributes/options.
+- Columns contain total and banner cuts such as gender, age, region, customer group, brand group, etc.
+- Each table starts with a table label and question text, followed by banner headers, base row, and response rows.
+
+Example:
 
 ```text
-theme, metric_type, n, mean, top_two_box, low_rating, excellent, promoters, passives, detractors, score, selected_pct, selected_n
+Table 1
+
+Q1: Shopping Preference
+
+,Total,Gender,,Age
+,Total Respondents,Male,Female,25-34
+Base: Total Respondents,100,45,55,40
+Like shopping a lot,0.62,0.55,0.70,0.68
+Shop only when needed,0.38,0.45,0.30,0.32
 ```
 
-Supported `metric_type` values:
+The app generates:
 
-- `rating`
-- `nps`
-- `selection`
-
-The app also accepts common aliases such as `label`, `question`, `base`, `top2`, `low`, `nps_score`, and `percentage`.
+- Overall leading response insight for each table.
+- Banner over-index insight.
+- Banner under-index/gap insight.
+- Overall summary insight.
+- Complete story insight.
 
 ## Run Locally
 
@@ -75,7 +89,7 @@ streamlit run app.py
 ## Deploy On Streamlit Community Cloud
 
 1. Create a GitHub repository.
-2. Upload `app.py`, `aicf_framework.py`, `insight_generator.py`, `table_insight_generator.py`, `requirements.txt`, and `README.md`.
+2. Upload `app.py`, `aicf_framework.py`, `insight_generator.py`, `table_insight_generator.py`, `story_generator.py`, `requirements.txt`, and `README.md`.
 3. Go to Streamlit Community Cloud.
 4. Select the GitHub repository.
 5. Set the main file path as `app.py`.

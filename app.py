@@ -5,6 +5,7 @@ import streamlit as st
 
 from aicf_framework import DIMENSIONS, REQUIRED_COLUMNS, score_insight, validate_columns
 from insight_generator import extract_questionnaire_text, generate_insights, read_survey_file
+from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
 APP_VERSION = "AICF Streamlit Tool v4 + Table Output"
@@ -38,51 +39,15 @@ def make_template() -> pd.DataFrame:
 def make_table_template() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {
-                "theme": "Overall Quality",
-                "metric_type": "rating",
-                "n": 347,
-                "mean": 3.59,
-                "top_two_box": 59.7,
-                "low_rating": 18.4,
-                "excellent": 24.2,
-                "promoters": "",
-                "passives": "",
-                "detractors": "",
-                "score": "",
-                "selected_pct": "",
-                "selected_n": "",
-            },
-            {
-                "theme": "Recommendation Advocacy",
-                "metric_type": "nps",
-                "n": 347,
-                "mean": "",
-                "top_two_box": "",
-                "low_rating": "",
-                "excellent": "",
-                "promoters": 50.1,
-                "passives": 28.5,
-                "detractors": 21.3,
-                "score": 28.8,
-                "selected_pct": "",
-                "selected_n": "",
-            },
-            {
-                "theme": "Improve Customer Experience",
-                "metric_type": "selection",
-                "n": 347,
-                "mean": "",
-                "top_two_box": "",
-                "low_rating": "",
-                "excellent": "",
-                "promoters": "",
-                "passives": "",
-                "detractors": "",
-                "score": "",
-                "selected_pct": 45.2,
-                "selected_n": 157,
-            },
+            ["Table 1", "", "", "", ""],
+            ["", "", "", "", ""],
+            ["Q1: Shopping Preference", "", "", "", ""],
+            ["", "", "", "", ""],
+            ["", "Total", "Gender", "", "Age"],
+            ["", "Total Respondents", "Male", "Female", "25-34"],
+            ["Base: Total Respondents", 100, 45, 55, 40],
+            ["Like shopping a lot", 0.62, 0.55, 0.70, 0.68],
+            ["Shop only when needed", 0.38, 0.45, 0.30, 0.32],
         ]
     )
 
@@ -121,9 +86,9 @@ with st.sidebar:
 
     table_template_csv = make_table_template().to_csv(index=False).encode("utf-8")
     st.download_button(
-        "Download Table Output Template",
+        "Download Banner Table Example",
         data=table_template_csv,
-        file_name="aicf_table_output_template.csv",
+        file_name="aicf_banner_table_example.csv",
         mime="text/csv",
     )
 
@@ -133,7 +98,6 @@ with mode[0]:
     st.subheader("Generate AI-Style Insights From Survey Data")
     survey_file = st.file_uploader("Upload survey data", type=["csv", "xlsx", "xls", "sav"])
     questionnaire_file = st.file_uploader("Optional: upload questionnaire", type=["docx", "txt"])
-    max_insights = st.slider("Maximum insights to generate", min_value=5, max_value=50, value=25)
 
     if survey_file is None:
         st.info("Upload survey data to generate insights and evidence notes automatically.")
@@ -141,7 +105,8 @@ with mode[0]:
         try:
             survey_df, labels = read_survey_file(survey_file)
             questionnaire_text = extract_questionnaire_text(questionnaire_file)
-            generated_df = generate_insights(survey_df, labels, questionnaire_text, max_insights=max_insights)
+            generated_df = generate_insights(survey_df, labels, questionnaire_text, max_insights=10000)
+            generated_df = add_summary_and_story(generated_df, "survey data")
         except Exception as exc:
             st.error(f"Could not generate insights: {exc}")
             st.stop()
@@ -182,19 +147,11 @@ with mode[0]:
 
 with mode[1]:
     st.subheader("Generate Insights From Tabulated Output")
-    table_file = st.file_uploader("Upload table output", type=["csv", "xlsx", "xls"])
-    table_max_insights = st.slider(
-        "Maximum table insights to generate",
-        min_value=5,
-        max_value=50,
-        value=25,
-        key="table_max_insights",
-    )
+    table_file = st.file_uploader("Upload banner table output", type=["csv", "xlsx", "xls"])
 
     st.caption(
-        "Expected columns include theme, metric_type, n, mean, top_two_box, low_rating, "
-        "promoters, passives, detractors, score, selected_pct, or selected_n. "
-        "The app also accepts common aliases such as label, question, base, top2, low, and nps."
+        "Use MR-style banner tables where answer attributes are in rows and audience cuts/banners are in columns. "
+        "The app generates question-level insights, banner-cut comparisons, an overall summary, and a complete story."
     )
 
     if table_file is None:
@@ -203,7 +160,8 @@ with mode[1]:
     else:
         try:
             table_df = read_table_file(table_file)
-            table_insights = generate_insights_from_table(table_df, max_insights=table_max_insights)
+            table_insights = generate_insights_from_table(table_df)
+            table_insights = add_summary_and_story(table_insights, "banner table output")
         except Exception as exc:
             st.error(f"Could not generate table insights: {exc}")
             st.stop()
