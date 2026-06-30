@@ -145,21 +145,24 @@ def is_table_evidence(text: str) -> bool:
 def review_status(score: float, dimension_scores: Dict[str, int]) -> str:
     if score < 2.50 or min(dimension_scores.values()) <= 2:
         return "Human review required"
+    if score >= 4.00 and min(dimension_scores.values()) >= 3:
+        return "Ready with evidence documentation"
     if score < 3.50 or any(value == 3 for value in dimension_scores.values()):
         return "Researcher check recommended"
     return "Ready with evidence documentation"
 
 
-def dimension_diagnostics(dimension_scores: Dict[str, int], row: Dict[str, object]) -> tuple[str, str]:
+def dimension_diagnostics(dimension_scores: Dict[str, int], row: Dict[str, object], weighted_score: float = 0) -> tuple[str, str]:
     combined = f"{row.get('insight_text', '')} {row.get('evidence_note', '')}"
     table_evidence = is_table_evidence(combined)
     theme = str(row.get("theme", "")).lower()
     is_synthesis = theme in {"overall summary", "complete story"}
+    attention_threshold = 2 if weighted_score >= 4.00 and table_evidence and not is_synthesis else 3
 
     dimensions_needing_attention = [
         (key, score)
         for key, score in sorted(dimension_scores.items(), key=lambda item: item[1])
-        if score <= 3
+        if score <= attention_threshold
     ]
 
     if not dimensions_needing_attention:
@@ -252,6 +255,7 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     scores["evidence_strength"] = evidence_strength_score(combined, review_signal, risky_claim)
     if table_evidence and not review_signal and not risky_claim:
         scores["evidence_strength"] = max(scores["evidence_strength"], 4)
+        scores["methodological_fit"] = max(scores["methodological_fit"], 4)
 
     if contains_any(combined, ["customer", "satisfaction", "market", "survey", "respondent", "brand", "product", "service", "business"]):
         scores["methodological_fit"] += 1
@@ -328,7 +332,7 @@ def score_insight(row: Dict[str, object], use_manual_scores: bool = False) -> AI
         for key in DIMENSIONS
     )
 
-    weakest_dimensions, recommendation = dimension_diagnostics(dimension_scores, row)
+    weakest_dimensions, recommendation = dimension_diagnostics(dimension_scores, row, weighted_score)
 
     return AICFResult(
         insight_id=str(row.get("insight_id", "")).strip(),
