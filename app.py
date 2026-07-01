@@ -8,7 +8,7 @@ from insight_generator import extract_questionnaire_text, generate_insights, rea
 from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
-APP_VERSION = "AICF Streamlit Tool v4 + Final Review Status Fix 2026-06-30"
+APP_VERSION = "AICF Streamlit Tool v4 + Independent Uploads + Theme Evidence Fix 2026-07-01"
 
 st.set_page_config(
     page_title="AICF Tool",
@@ -50,6 +50,18 @@ def make_table_template() -> pd.DataFrame:
             ["Shop only when needed", 0.38, 0.45, 0.30, 0.32],
         ]
     )
+
+
+def read_insight_file(uploaded_file) -> pd.DataFrame:
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    if name.endswith((".xlsx", ".xls")):
+        return pd.read_excel(uploaded_file)
+    if name.endswith(".sav"):
+        df, _ = read_survey_file(uploaded_file)
+        return df
+    raise ValueError("Please upload a CSV, Excel, or SPSS .sav file.")
 
 
 def score_dataframe(df: pd.DataFrame, use_manual_scores: bool = False) -> pd.DataFrame:
@@ -124,8 +136,8 @@ mode = st.tabs(["Generate From Survey", "Generate From Tables", "Score Existing 
 
 with mode[0]:
     st.subheader("Generate AI-Style Insights From Survey Data")
-    survey_file = st.file_uploader("Upload survey data", type=["csv", "xlsx", "xls", "sav"])
-    questionnaire_file = st.file_uploader("Optional: upload questionnaire", type=["docx", "txt"])
+    survey_file = st.file_uploader("Upload survey data", type=["csv", "xlsx", "xls", "sav"], key="survey_data_file")
+    questionnaire_file = st.file_uploader("Optional: upload questionnaire", type=["docx", "txt"], key="survey_questionnaire_file")
 
     if survey_file is None:
         st.info("Upload survey data to generate insights and evidence notes automatically.")
@@ -183,7 +195,7 @@ with mode[0]:
 
 with mode[1]:
     st.subheader("Generate Insights From Tabulated Output")
-    table_file = st.file_uploader("Upload banner table output", type=["csv", "xlsx", "xls"])
+    table_file = st.file_uploader("Upload banner table output", type=["csv", "xlsx", "xls", "sav"], key="table_output_file")
 
     st.caption(
         "Use MR-style banner tables where answer attributes are in rows and audience cuts/banners are in columns. "
@@ -245,21 +257,22 @@ with mode[1]:
             )
 
 with mode[2]:
-    uploaded_file = st.file_uploader("Upload insights CSV", type=["csv"])
+    uploaded_file = st.file_uploader("Upload insights file", type=["csv", "xlsx", "xls", "sav"], key="existing_insights_file")
     use_manual_scores = st.checkbox(
         "Use manual evaluator score columns if present",
         value=False,
+        key="use_manual_scores",
         help="Keep this off when you want AICF to calculate the dimension scores automatically.",
     )
 
     if uploaded_file is None:
-        st.info("Upload a CSV with only `insight_id` and `insight_text`. You may add `evidence_note` for better scoring.")
+        st.info("Upload a CSV, Excel, or SPSS file with at least `insight_id` and `insight_text`. You may add `evidence_note` for better scoring.")
         st.dataframe(make_template(), use_container_width=True)
     else:
         try:
-            df = pd.read_csv(uploaded_file)
+            df = read_insight_file(uploaded_file)
         except Exception as exc:
-            st.error(f"Could not read the CSV file: {exc}")
+            st.error(f"Could not read the insights file: {exc}")
             st.stop()
 
         missing_columns = validate_columns(list(df.columns))

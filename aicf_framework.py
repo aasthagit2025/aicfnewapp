@@ -95,7 +95,7 @@ def clamp_score(score: int) -> int:
 
 
 def has_numeric_evidence(text: str) -> bool:
-    return bool(re.search(r"\b\d+(\.\d+)?\s*(%|/5|/10|respondents?|n=|mean|score|rating|top)", text, re.I))
+    return bool(re.search(r"(\b\d+(\.\d+)?\s*(%|/5|/10|respondents?|mean|score|rating|top)|\b(n|base)\s*=\s*\d+)", text, re.I))
 
 
 def contains_any(text: str, words: List[str]) -> bool:
@@ -212,9 +212,14 @@ def dimension_diagnostics(dimension_scores: Dict[str, int], row: Dict[str, objec
     return "; ".join(weakest_labels), " ".join(recommended_actions)
 
 
+def is_missing(value: object) -> bool:
+    text = str(value or "").strip()
+    return text == "" or text.lower() in {"nan", "none", "null", "not specified"}
+
+
 def normalize_theme(value: object) -> str:
     theme = str(value or "").strip()
-    if not theme:
+    if is_missing(theme):
         return "Not specified"
 
     lowered = theme.lower()
@@ -226,10 +231,33 @@ def normalize_theme(value: object) -> str:
     return theme
 
 
+def infer_theme(row: Dict[str, object]) -> str:
+    theme = normalize_theme(row.get("theme", ""))
+    if theme != "Not specified":
+        return theme
+
+    source = str(row.get("insight_id", "") or "").strip()
+    if not source:
+        return "Not specified"
+
+    bracket_match = re.search(r"\(([^()]*(?:usage|apps?|brand|category|social|dating|voice|streaming|game|awareness|consideration)[^()]*)", source, re.I)
+    if bracket_match:
+        return bracket_match.group(1).replace("Base=", "").strip(" -:/")[:80] or "Not specified"
+
+    cleaned = re.sub(r"\(.*?base\s*=\s*\d+.*?\)", "", source, flags=re.I)
+    cleaned = re.sub(r"^q\d+[a-z]?\.\s*", "", cleaned, flags=re.I)
+    cleaned = cleaned.replace("?", "").strip(" -:/")
+    if cleaned:
+        return cleaned[:80]
+    return "Not specified"
+
+
 def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     insight = str(row.get("insight_text", "") or "")
-    evidence = str(row.get("evidence_note", "") or "")
-    combined = f"{insight} {evidence}".strip()
+    evidence = "" if is_missing(row.get("evidence_note", "")) else str(row.get("evidence_note", "") or "")
+    source_context = str(row.get("insight_id", "") or "")
+    evidence_context = evidence or source_context
+    combined = f"{insight} {evidence_context}".strip()
     word_count = len(re.findall(r"\w+", insight))
 
     table_evidence = is_table_evidence(combined)
@@ -238,7 +266,7 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     risky_claim = contains_any(combined, ["fully satisfied", "all customers", "no improvement", "main reason", "primary cause", "only serious", "exclusive benchmark", "reduce investment"])
     evidence_markers = sum(
         1
-        for marker in ["n=", "mean", "top-two", "low ratings", "promoters", "detractors", "nps-style", "selected percentage", "%"]
+        for marker in ["n=", "base=", "mean", "top-two", "low ratings", "promoters", "detractors", "nps-style", "selected percentage", "%"]
         if marker in combined.lower()
     )
     complete_survey_evidence = (
@@ -253,6 +281,8 @@ def auto_dimension_scores(row: Dict[str, object]) -> Dict[str, int]:
     scores = {key: base for key in DIMENSIONS}
 
     scores["evidence_strength"] = evidence_strength_score(combined, review_signal, risky_claim)
+    if not evidence and re.search(r"\bbase\s*=\s*\d+", source_context, re.I) and not review_signal and not risky_claim:
+        scores["evidence_strength"] = max(scores["evidence_strength"], 3)
     if table_evidence and not review_signal and not risky_claim:
         scores["evidence_strength"] = max(scores["evidence_strength"], 4)
         scores["methodological_fit"] = max(scores["methodological_fit"], 4)
@@ -333,12 +363,17 @@ def score_insight(row: Dict[str, object], use_manual_scores: bool = False) -> AI
     )
 
     weakest_dimensions, recommendation = dimension_diagnostics(dimension_scores, row, weighted_score)
+    evidence_note = "" if is_missing(row.get("evidence_note", "")) else str(row.get("evidence_note", "") or "").strip()
+    if not evidence_note:
+        source_context = str(row.get("insight_id", "") or "").strip()
+        if re.search(r"\b(base|n)\s*=\s*\d+", source_context, re.I):
+            evidence_note = f"Source context: {source_context}"
 
     return AICFResult(
         insight_id=str(row.get("insight_id", "")).strip(),
-        theme=normalize_theme(row.get("theme", "")),
+        theme=infer_theme(row),
         insight_text=str(row.get("insight_text", "")).strip(),
-        evidence_note=str(row.get("evidence_note", "") or "").strip(),
+        evidence_note=evidence_note,
         evidence_strength=dimension_scores["evidence_strength"],
         methodological_fit=dimension_scores["methodological_fit"],
         triangulation=dimension_scores["triangulation"],

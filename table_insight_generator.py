@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import tempfile
 from typing import BinaryIO, Dict, List, Tuple
 
 import pandas as pd
+from pathlib import Path
 
 
 def read_table_file(uploaded_file: BinaryIO) -> pd.DataFrame:
@@ -27,7 +29,21 @@ def read_table_file(uploaded_file: BinaryIO) -> pd.DataFrame:
             separator = pd.DataFrame([[None] * max_cols])
             normalized.extend([normalized_sheet, separator])
         return pd.concat(normalized, ignore_index=True)
-    raise ValueError("Please upload a CSV or Excel banner table output.")
+    if name.endswith(".sav"):
+        try:
+            import pyreadstat
+        except ImportError as exc:
+            raise RuntimeError("SPSS .sav support needs pyreadstat in requirements.txt.") from exc
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".sav") as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
+        try:
+            df, _ = pyreadstat.read_sav(tmp_path, apply_value_formats=False)
+            return df
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    raise ValueError("Please upload a CSV, Excel, or SPSS .sav banner table output.")
 
 
 def clean_text(value: object) -> str:

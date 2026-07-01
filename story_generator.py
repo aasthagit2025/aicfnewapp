@@ -32,6 +32,8 @@ def management_worthy(item: Dict[str, object], require_gap: bool = False) -> boo
     attribute = str(item.get("attribute", ""))
     theme = str(item.get("theme", ""))
     banner = str(item.get("banner", ""))
+    attribute_lower = attribute.lower().strip()
+    theme_lower = theme.lower().strip()
     pct = float(item.get("pct", 0))
     gap = float(item.get("gap", 0))
 
@@ -41,7 +43,32 @@ def management_worthy(item: Dict[str, object], require_gap: bool = False) -> boo
         return False
     if len(attribute) > 120 or len(theme) > 100 or len(banner) > 140:
         return False
-    if attribute.lower() in {"other", "none", "none of the above", "don't know", "dont know"}:
+    if attribute_lower in {
+        "other",
+        "none",
+        "none of the above",
+        "don't know",
+        "dont know",
+        "minimum",
+        "maximum",
+        "mean",
+        "median",
+        "std. deviation",
+        "standard deviation",
+        "sigma",
+    }:
+        return False
+    if attribute_lower.startswith(("none -", "none –", "none —")):
+        return False
+    if re.match(r"^\d+(\.\d+)?$", attribute_lower):
+        return False
+    if any(word in attribute_lower for word in ["top 2 box", "top 3 box", "bottom 2 box", "bottom 3 box"]):
+        return False
+    if theme_lower == "banner x banner":
+        return False
+    if re.match(r"^s\d+\b", theme_lower):
+        return False
+    if any(word in theme_lower for word in ["age", "gender", "employment", "specialty", "screen", "screener"]):
         return False
     return True
 
