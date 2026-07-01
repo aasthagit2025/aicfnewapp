@@ -8,7 +8,7 @@ from insight_generator import extract_questionnaire_text, generate_insights, rea
 from story_generator import add_summary_and_story
 from table_insight_generator import generate_insights_from_table, read_table_file
 
-APP_VERSION = "AICF Streamlit Tool v4 + Independent Uploads + Theme Evidence Fix 2026-07-01"
+APP_VERSION = "AICF Streamlit Tool v4 + Multi Banner CSV Support 2026-07-01"
 
 st.set_page_config(
     page_title="AICF Tool",
@@ -73,9 +73,12 @@ def score_dataframe(df: pd.DataFrame, use_manual_scores: bool = False) -> pd.Dat
         except TypeError:
             scored = score_insight(row_dict)
         if hasattr(scored, "__dict__"):
-            results.append(scored.__dict__)
+            scored_dict = scored.__dict__
         else:
-            results.append(dict(scored))
+            scored_dict = dict(scored)
+        if "source_file" in row_dict:
+            scored_dict["source_file"] = row_dict.get("source_file", "")
+        results.append(scored_dict)
     return align_review_status(pd.DataFrame(results))
 
 
@@ -105,6 +108,24 @@ def summary_story_rows(report: pd.DataFrame) -> pd.DataFrame:
     if report.empty or "theme" not in report.columns:
         return pd.DataFrame()
     return report[report["theme"].isin(["Overall Summary", "Complete Story"])].copy()
+
+
+def generate_table_insights_from_uploads(uploaded_files) -> pd.DataFrame:
+    insight_frames = []
+    for uploaded_file in uploaded_files:
+        table_df = read_table_file(uploaded_file)
+        file_insights = generate_insights_from_table(table_df)
+        if file_insights.empty:
+            continue
+        file_insights.insert(1, "source_file", uploaded_file.name)
+        insight_frames.append(file_insights)
+
+    if not insight_frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(insight_frames, ignore_index=True)
+    combined["insight_id"] = [f"BT-{idx + 1:03d}" for idx in range(len(combined))]
+    return combined
 
 
 st.title("AI Insight Confidence Framework")
@@ -195,21 +216,26 @@ with mode[0]:
 
 with mode[1]:
     st.subheader("Generate Insights From Tabulated Output")
-    table_file = st.file_uploader("Upload banner table output", type=["csv", "xlsx", "xls", "sav"], key="table_output_file")
+    table_files = st.file_uploader(
+        "Upload banner table output",
+        type=["csv", "xlsx", "xls", "sav"],
+        key="table_output_file",
+        accept_multiple_files=True,
+    )
 
     st.caption(
         "Use MR-style banner tables where answer attributes are in rows and audience cuts/banners are in columns. "
         "The app generates question-level insights, banner-cut comparisons, an overall summary, and a complete story."
     )
 
-    if table_file is None:
-        st.info("Upload a CSV or Excel table output to generate evidence-backed insights.")
+    if not table_files:
+        st.info("Upload one or more CSV, Excel, or SPSS table outputs to generate evidence-backed insights.")
         st.dataframe(make_table_template(), use_container_width=True)
     else:
         try:
-            table_df = read_table_file(table_file)
-            table_insights = generate_insights_from_table(table_df)
-            table_insights = add_summary_and_story(table_insights, "banner table output")
+            table_insights = generate_table_insights_from_uploads(table_files)
+            source_label = f"{len(table_files)} uploaded banner table file(s)"
+            table_insights = add_summary_and_story(table_insights, source_label)
         except Exception as exc:
             st.error(f"Could not generate table insights: {exc}")
             st.stop()
@@ -218,7 +244,7 @@ with mode[1]:
             st.warning("No table insights could be generated. Check whether your table has a theme/label column and metric columns.")
             st.stop()
 
-        st.write(f"Generated {len(table_insights)} insights from uploaded table output.")
+        st.write(f"Generated {len(table_insights)} insights from {len(table_files)} uploaded table file(s).")
         st.dataframe(table_insights, use_container_width=True)
 
         table_report = score_dataframe(table_insights, use_manual_scores=False)

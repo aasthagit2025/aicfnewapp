@@ -68,7 +68,7 @@ def management_worthy(item: Dict[str, object], require_gap: bool = False) -> boo
         return False
     if re.match(r"^s\d+\b", theme_lower):
         return False
-    if any(word in theme_lower for word in ["age", "gender", "employment", "specialty", "screen", "screener"]):
+    if any(word in theme_lower for word in ["age", "gender", "employment", "specialty", "screen", "screener", "region", "city", "country", "subdivision"]):
         return False
     return True
 

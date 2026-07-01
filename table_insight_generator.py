@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import re
 from typing import BinaryIO, Dict, List, Tuple
 
 import pandas as pd
@@ -10,12 +11,19 @@ from pathlib import Path
 def read_table_file(uploaded_file: BinaryIO) -> pd.DataFrame:
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file, header=None)
+        last_error: Exception | None = None
+        for encoding in ["utf-8-sig", "utf-8", "cp1252", "latin1"]:
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, header=None, encoding=encoding, engine="python")
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        raise RuntimeError(f"Could not read CSV encoding: {last_error}")
     if name.endswith((".xlsx", ".xls")):
         sheets = pd.read_excel(uploaded_file, header=None, sheet_name=None)
         table_sheets = [
             sheet for sheet in sheets.values()
-            if find_table_starts(sheet) or parse_generic_grid_tables(sheet)
+            if find_table_starts(sheet) or parse_sperc_tables(sheet) or parse_generic_grid_tables(sheet)
         ]
         if not table_sheets:
             return next(iter(sheets.values()))
@@ -63,9 +71,19 @@ def clean_theme(value: object) -> str:
 
 
 def numeric_pct(value: object) -> float | None:
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "")
+        if cleaned in {"", "-", "- ", "–", "—"}:
+            return None
+        cleaned = cleaned.replace("*", "")
+        if cleaned.endswith("%"):
+            cleaned = cleaned[:-1].strip()
+        value = cleaned
     try:
         number = float(value)
     except (TypeError, ValueError):
+        return None
+    if pd.isna(number):
         return None
     if number > 100:
         return None
@@ -159,9 +177,15 @@ def valid_attribute(text: str) -> bool:
         return False
     if lowered.startswith("base") or lowered.startswith("unweighted"):
         return False
+    if lowered.startswith("proportions/means") or lowered.startswith("go to index"):
+        return False
+    if lowered.startswith("* small base") or set(lowered) == {"_"}:
+        return False
     if lowered in {"sigma", "sig", "significance"}:
         return False
     if lowered.startswith("sig "):
+        return False
+    if lowered in {"total", "sum", "tw", "jp", "mx"}:
         return False
     if lowered in {"1", "0"}:
         return False
@@ -201,6 +225,114 @@ def parse_table_block(df: pd.DataFrame, start: int, end: int, stub_col: int) -> 
         "theme": clean_theme(question),
         "rows": rows,
     }
+
+
+def row_has_text(df: pd.DataFrame, row_idx: int, text: str) -> bool:
+    target = text.lower()
+    return any(target in clean_text(value).lower() for value in df.iloc[row_idx].tolist())
+
+
+def is_code_row(values: List[str]) -> bool:
+    non_empty = [value for value in values if value]
+    if not non_empty:
+        return False
+    code_like = sum(1 for value in non_empty if re.fullmatch(r"[A-Za-z]", value))
+    return code_like >= max(2, len(non_empty) // 2)
+
+
+def find_sperc_starts(df: pd.DataFrame) -> List[Tuple[int, int]]:
+    starts: List[Tuple[int, int]] = []
+    for idx in range(len(df) - 1):
+        found = row_first_nonempty(df, idx)
+        if not found:
+            continue
+        stub_col, question = found
+        lowered = question.lower()
+        next_text = clean_text(df.iat[idx + 1, stub_col]).lower()
+        if (
+            next_text.startswith("base")
+            and "hidden" not in lowered
+            and not lowered.startswith(("base", "go to index", "proportions/means"))
+        ):
+            starts.append((idx, stub_col))
+    return starts
+
+
+def sperc_banner_labels(df: pd.DataFrame, stub_col: int, header_start: int, total_row: int) -> Dict[int, str]:
+    header_rows = []
+    for idx in range(header_start, total_row):
+        values = [clean_text(value) for value in df.iloc[idx, stub_col + 1:].tolist()]
+        if not any(values) or is_code_row(values):
+            continue
+        header_rows.append(idx)
+
+    group_row = header_rows[0] if header_rows else None
+    label_row = header_rows[1] if len(header_rows) > 1 else None
+    labels: Dict[int, str] = {}
+    current_group = ""
+    for col in range(stub_col + 1, df.shape[1]):
+        group = clean_text(df.iat[group_row, col]) if group_row is not None else ""
+        if group:
+            current_group = group
+        label = clean_text(df.iat[label_row, col]) if label_row is not None else ""
+
+        if current_group and label and current_group.lower() != label.lower():
+            labels[col] = f"{current_group} - {label}"
+        elif label:
+            labels[col] = label
+        elif current_group:
+            labels[col] = current_group
+        else:
+            labels[col] = f"Column {col + 1}"
+    return labels
+
+
+def parse_sperc_block(df: pd.DataFrame, start: int, end: int, stub_col: int, table_number: int) -> Dict[str, object] | None:
+    question = row_text_from_stub(df, start, stub_col)
+    total_row = None
+    for idx in range(start + 2, min(start + 10, end)):
+        if clean_text(df.iat[idx, stub_col]).lower() == "total":
+            total_row = idx
+            break
+    if total_row is None:
+        return None
+
+    labels = sperc_banner_labels(df, stub_col, start + 2, total_row)
+    rows = []
+    for idx in range(total_row + 1, end):
+        attribute = clean_text(df.iat[idx, stub_col])
+        if row_has_text(df, idx, "Proportions/Means") or row_has_text(df, idx, "Go to Index"):
+            break
+        if not valid_attribute(attribute):
+            continue
+        values = {}
+        for col, banner in labels.items():
+            pct = numeric_pct(df.iat[idx, col])
+            if pct is not None:
+                values[banner] = pct
+        if values:
+            rows.append({"attribute": attribute, "values": values})
+
+    if not rows:
+        return None
+
+    return {
+        "table": f"SPERC Table {table_number}",
+        "question": question,
+        "theme": clean_theme(question),
+        "rows": rows,
+    }
+
+
+def parse_sperc_tables(df: pd.DataFrame) -> List[Dict[str, object]]:
+    starts = find_sperc_starts(df)
+    tables = []
+    for pos, (start, stub_col) in enumerate(starts, start=1):
+        end = starts[pos][0] if pos < len(starts) else len(df)
+        parsed = parse_sperc_block(df, start, end, stub_col, pos)
+        if parsed:
+            tables.append(parsed)
+    return tables
 
 
 def row_numeric_values(df: pd.DataFrame, row_idx: int, stub_col: int) -> Dict[int, float]:
@@ -389,7 +521,12 @@ def parse_banner_tables(df: pd.DataFrame) -> List[Dict[str, object]]:
         parsed = parse_table_block(df, start, end, stub_col)
         if parsed:
             tables.append(parsed)
-    return tables or parse_generic_grid_tables(df)
+    if tables:
+        return tables
+    sperc_tables = parse_sperc_tables(df)
+    if sperc_tables:
+        return sperc_tables
+    return parse_generic_grid_tables(df)
 
 
 def add_story_insights(insights: List[Dict[str, str]], tables: List[Dict[str, object]]) -> None:
